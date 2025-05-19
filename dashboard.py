@@ -4,11 +4,10 @@ import csv
 from datetime import datetime
 import random
 import pandas as pd
-import sqlite3
+import psycopg2
 
 # --- Constants ---
 CSV_PATH = Path("bestellungen.csv")
-DB_PATH = Path("bestellungen.db")
 CATEGORY_COLORS = {
     "BIER": "#e0f7fa",
     "DIVERSES": "#f1f8e9",
@@ -35,12 +34,12 @@ PRODUCTS = {
 
 # --- Database Initialization ---
 def init_db():
-    conn = sqlite3.connect(DB_PATH)
+    conn = psycopg2.connect(st.secrets["db_url"])
     c = conn.cursor()
     c.execute(
         """
         CREATE TABLE IF NOT EXISTS orders (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             order_number TEXT,
             timestamp TEXT,
             category TEXT,
@@ -57,7 +56,6 @@ def init_db():
 # --- Session State Initialization ---
 def init_state():
     if 'orders' not in st.session_state:
-        # store orders as dict with key (category, product)
         st.session_state.orders = {}
     if 'total' not in st.session_state:
         st.session_state.total = 0
@@ -72,21 +70,20 @@ def add_order(category: str, product: str, price: int):
         orders[key] = {'category': category, 'product': product, 'count': 1, 'price': price}
     st.session_state.total += price
 
-
 def reset_order():
     st.session_state.orders = {}
     st.session_state.total = 0
 
-
 def submit_order():
     order_num = datetime.now().strftime("%Y%m%d%H%M%S") + f"{random.randint(100,999)}"
     ts = datetime.now().isoformat()
-    # CSV backup
+
+    # CSV backup (optional, for local audit)
     file_exists = CSV_PATH.exists()
     with CSV_PATH.open('a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["order_number","timestamp","category","product","quantity","unit_price","total_price"])
+            writer.writerow(["order_number", "timestamp", "category", "product", "quantity", "unit_price", "total_price"])
         for (_, _), data in st.session_state.orders.items():
             writer.writerow([
                 order_num,
@@ -97,27 +94,33 @@ def submit_order():
                 data['price'],
                 data['count'] * data['price']
             ])
-    # Database insert
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    for (_, _), data in st.session_state.orders.items():
-        c.execute(
-            "INSERT INTO orders(order_number,timestamp,category,product,quantity,unit_price,total_price) "
-            "VALUES(?,?,?,?,?,?,?)",
-            (
-                order_num,
-                ts,
-                data['category'],
-                data['product'],
-                data['count'],
-                data['price'],
-                data['count'] * data['price']
+
+    # Remote DB insert
+    try:
+        conn = psycopg2.connect(st.secrets["db_url"])
+        c = conn.cursor()
+        for (_, _), data in st.session_state.orders.items():
+            c.execute(
+                """
+                INSERT INTO orders(order_number, timestamp, category, product, quantity, unit_price, total_price)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """,
+                (
+                    order_num,
+                    ts,
+                    data['category'],
+                    data['product'],
+                    data['count'],
+                    data['price'],
+                    data['count'] * data['price']
+                )
             )
-        )
-    conn.commit()
-    conn.close()
-    st.success(f"Order {order_num} submitted and saved!")
-    reset_order()
+        conn.commit()
+        conn.close()
+        st.success(f"Order {order_num} submitted and saved!")
+        reset_order()
+    except Exception as e:
+        st.error(f"Error saving to database: {e}")
 
 # --- UI Components ---
 def render_summary():
@@ -129,7 +132,7 @@ def render_summary():
                 "Kategorie": data['category'],
                 "Produkt": data['product'],
                 "Menge": data['count'],
-                "Einzelpreis": f"{data['price']} CHF",  # per unit
+                "Einzelpreis": f"{data['price']} CHF",
                 "Gesamt": f"{data['count'] * data['price']} CHF"
             })
         df = pd.DataFrame(rows)
@@ -151,7 +154,6 @@ def main():
     </style>
     """, unsafe_allow_html=True)
 
-    # Header & Summary
     st.title("Beizlifest Dashboard")
     render_summary()
     c1, c2 = st.columns(2)
