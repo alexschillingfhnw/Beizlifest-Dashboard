@@ -32,9 +32,14 @@ PRODUCTS = {
     "ESSEN": [("Plättli", 18), ("Hot Dog", 5)]
 }
 
+# --- Cached DB Connection ---
+@st.cache_resource
+def get_connection():
+    return psycopg2.connect(st.secrets["db_url"])
+
 # --- Database Initialization ---
 def init_db():
-    conn = psycopg2.connect(st.secrets["db_url"])
+    conn = get_connection()
     c = conn.cursor()
     c.execute(
         """
@@ -51,7 +56,6 @@ def init_db():
         """
     )
     conn.commit()
-    conn.close()
 
 # --- Session State Initialization ---
 def init_state():
@@ -97,7 +101,7 @@ def submit_order():
 
     # Remote DB insert
     try:
-        conn = psycopg2.connect(st.secrets["db_url"])
+        conn = get_connection()
         c = conn.cursor()
         for (_, _), data in st.session_state.orders.items():
             c.execute(
@@ -116,7 +120,6 @@ def submit_order():
                 )
             )
         conn.commit()
-        conn.close()
         st.success(f"Order {order_num} submitted and saved!")
         reset_order()
     except Exception as e:
