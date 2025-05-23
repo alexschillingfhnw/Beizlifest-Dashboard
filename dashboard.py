@@ -41,9 +41,8 @@ def get_connection():
 def init_db():
     conn = get_connection()
     c = conn.cursor()
-    c.execute(
-        """
-        CREATE TABLE IF NOT EXISTS orders (
+    c.execute("""
+        CREATE TABLE IF NOT EXISTS bar_orders (
             id SERIAL PRIMARY KEY,
             order_number TEXT,
             timestamp TEXT,
@@ -51,10 +50,10 @@ def init_db():
             product TEXT,
             quantity INTEGER,
             unit_price REAL,
-            total_price REAL
-        )
-        """
-    )
+            total_price REAL,
+            order_type TEXT
+        );
+    """)
     conn.commit()
 
 # --- Session State Initialization ---
@@ -81,13 +80,14 @@ def reset_order():
 def submit_order():
     order_num = datetime.now().strftime("%Y%m%d%H%M%S") + f"{random.randint(100,999)}"
     ts = datetime.now().isoformat()
+    order_type = st.session_state.get("order_type", "Kundschaft")
 
-    # CSV backup (optional, for local audit)
+    # CSV backup
     file_exists = CSV_PATH.exists()
     with CSV_PATH.open('a', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
         if not file_exists:
-            writer.writerow(["order_number", "timestamp", "category", "product", "quantity", "unit_price", "total_price"])
+            writer.writerow(["order_number", "timestamp", "category", "product", "quantity", "unit_price", "total_price", "order_type"])
         for (_, _), data in st.session_state.orders.items():
             writer.writerow([
                 order_num,
@@ -96,18 +96,19 @@ def submit_order():
                 data['product'],
                 data['count'],
                 data['price'],
-                data['count'] * data['price']
+                data['count'] * data['price'],
+                order_type
             ])
 
-    # Remote DB insert
+    # DB insert
     try:
         conn = get_connection()
         c = conn.cursor()
         for (_, _), data in st.session_state.orders.items():
             c.execute(
                 """
-                INSERT INTO orders(order_number, timestamp, category, product, quantity, unit_price, total_price)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                INSERT INTO bar_orders(order_number, timestamp, category, product, quantity, unit_price, total_price, order_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                 """,
                 (
                     order_num,
@@ -116,11 +117,12 @@ def submit_order():
                     data['product'],
                     data['count'],
                     data['price'],
-                    data['count'] * data['price']
+                    data['count'] * data['price'],
+                    order_type
                 )
             )
         conn.commit()
-        st.success(f"Order {order_num} submitted and saved!")
+        st.success(f"Order {order_num} ({order_type}) submitted and saved!")
         reset_order()
     except Exception as e:
         st.error(f"Error saving to database: {e}")
@@ -149,7 +151,6 @@ def main():
     init_db()
     init_state()
 
-    # Custom CSS for tight buttons
     st.markdown("""
     <style>
         div.stButton { margin:0; padding:0 }
@@ -158,13 +159,21 @@ def main():
     """, unsafe_allow_html=True)
 
     st.title("Beizlifest Dashboard")
+
+    st.radio(
+        "Für wen ist die Bestellung?",
+        ["Kundschaft", "Personal"],
+        key="order_type",
+        horizontal=True
+    )
+
     render_summary()
+
     c1, c2 = st.columns(2)
     c1.button("Bestellung zurücksetzen", on_click=reset_order)
     c2.button("Bestellung absenden", on_click=submit_order)
     st.markdown("---")
 
-    # Product Catalog
     left, right = st.columns(2)
 
     with left:
